@@ -96,6 +96,7 @@
 #include "shell/common/options_switches.h"
 #include "shell/common/platform_util.h"
 #include "third_party/blink/public/common/loader/url_loader_throttle.h"
+#include "third_party/blink/public/mojom/badging/badging.mojom.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/native_theme/native_theme.h"
 #include "v8/include/v8.h"
@@ -699,10 +700,15 @@ void ElectronBrowserClient::AppendExtraCommandLineSwitches(
         content::ChildProcessHost::CHILD_RENDERER);
     auto gpu_child_path = content::ChildProcessHost::GetChildPath(
         content::ChildProcessHost::CHILD_GPU);
+#if BUILDFLAG(ENABLE_PLUGINS)
     auto plugin_child_path = content::ChildProcessHost::GetChildPath(
         content::ChildProcessHost::CHILD_PLUGIN);
-    if (program != renderer_child_path && program != gpu_child_path &&
-        program != plugin_child_path) {
+#endif
+    if (program != renderer_child_path && program != gpu_child_path
+#if BUILDFLAG(ENABLE_PLUGINS)
+        && program != plugin_child_path
+#endif
+    ) {
       child_path = content::ChildProcessHost::GetChildPath(
           content::ChildProcessHost::CHILD_NORMAL);
       CHECK_EQ(program, child_path)
@@ -769,6 +775,16 @@ void ElectronBrowserClient::AppendExtraCommandLineSwitches(
     if (env->HasVar("ELECTRON_PROFILE_INIT_SCRIPTS")) {
       command_line->AppendSwitch("profile-electron-init");
     }
+
+    // Extension background pages don't have WebContentsPreferences, but they
+    // support WebSQL by default.
+#if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)
+    content::RenderProcessHost* process =
+        content::RenderProcessHost::FromID(process_id);
+    if (extensions::ProcessMap::Get(process->GetBrowserContext())
+            ->Contains(process_id))
+      command_line->AppendSwitch(switches::kEnableWebSQL);
+#endif
 
     content::WebContents* web_contents =
         GetWebContentsFromProcessID(process_id);
@@ -1506,15 +1522,11 @@ void ElectronBrowserClient::OverrideURLLoaderFactoryParams(
     const url::Origin& origin,
     bool is_for_isolated_world,
     network::mojom::URLLoaderFactoryParams* factory_params) {
-  for (const auto& iter : process_preferences_) {
-    if (iter.second.browser_context != browser_context)
-      continue;
-
-    if (!iter.second.web_security) {
-      // bypass CORB
-      factory_params->process_id = iter.first;
-      factory_params->is_corb_enabled = false;
-    }
+  // Bypass CORB and CORS when web security is disabled.
+  auto it = process_preferences_.find(factory_params->process_id);
+  if (it != process_preferences_.end() && !it->second.web_security) {
+    factory_params->is_corb_enabled = false;
+    factory_params->disable_web_security = true;
   }
 
   extensions::URLLoaderFactoryManager::OverrideURLLoaderFactoryParams(
@@ -1578,6 +1590,12 @@ void ElectronBrowserClient::BindHostReceiverForRenderer(
 #endif
 }
 
+void BindBadgeManagerFrameReceiver(
+    content::RenderFrameHost* frame,
+    mojo::PendingReceiver<blink::mojom::BadgeService> receiver) {
+  LOG(WARNING) << "The Chromium Badging API is not available in Electron";
+}
+
 #if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)
 void BindMimeHandlerService(
     content::RenderFrameHost* frame_host,
@@ -1614,6 +1632,8 @@ void ElectronBrowserClient::RegisterBrowserInterfaceBindersForFrame(
     mojo::BinderMapWithContext<content::RenderFrameHost*>* map) {
   map->Add<network_hints::mojom::NetworkHintsHandler>(
       base::BindRepeating(&BindNetworkHintsHandler));
+  map->Add<blink::mojom::BadgeService>(
+      base::BindRepeating(&BindBadgeManagerFrameReceiver));
 #if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)
   map->Add<extensions::mime_handler::MimeHandlerService>(
       base::BindRepeating(&BindMimeHandlerService));

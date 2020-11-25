@@ -245,6 +245,48 @@ describe('web security', () => {
       <script src="${serverUrl}"></script>`);
     await p;
   });
+
+  it('engages CORS when web security is not disabled', async () => {
+    const w = new BrowserWindow({ show: false, webPreferences: { webSecurity: true, nodeIntegration: true } });
+    const p = emittedOnce(ipcMain, 'response');
+    await w.loadURL(`data:text/html,<script>
+        (async function() {
+          try {
+            await fetch('${serverUrl}');
+            require('electron').ipcRenderer.send('response', 'passed');
+          } catch {
+            require('electron').ipcRenderer.send('response', 'failed');
+          }
+        })();
+      </script>`);
+    const [, response] = await p;
+    expect(response).to.equal('failed');
+  });
+
+  it('bypasses CORS when web security is disabled', async () => {
+    const w = new BrowserWindow({ show: false, webPreferences: { webSecurity: false, nodeIntegration: true } });
+    const p = emittedOnce(ipcMain, 'response');
+    await w.loadURL(`data:text/html,<script>
+        (async function() {
+          try {
+            await fetch('${serverUrl}');
+            require('electron').ipcRenderer.send('response', 'passed');
+          } catch {
+            require('electron').ipcRenderer.send('response', 'failed');
+          }
+        })();
+      </script>`);
+    const [, response] = await p;
+    expect(response).to.equal('passed');
+  });
+
+  it('does not crash when multiple WebContent are created with web security disabled', () => {
+    const options = { webPreferences: { webSecurity: false } };
+    const w1 = new BrowserWindow(options);
+    w1.loadURL(serverUrl);
+    const w2 = new BrowserWindow(options);
+    w2.loadURL(serverUrl);
+  });
 });
 
 describe('command line switches', () => {
@@ -257,10 +299,13 @@ describe('command line switches', () => {
   });
   describe('--lang switch', () => {
     const currentLocale = app.getLocale();
-    const testLocale = async (locale: string, result: string) => {
+    const testLocale = async (locale: string, result: string, printEnv: boolean = false) => {
       const appPath = path.join(fixturesPath, 'api', 'locale-check');
-      const electronPath = process.execPath;
-      appProcess = ChildProcess.spawn(electronPath, [appPath, `--lang=${locale}`]);
+      const args = [appPath, `--set-lang=${locale}`];
+      if (printEnv) {
+        args.push('--print-env');
+      }
+      appProcess = ChildProcess.spawn(process.execPath, args);
 
       let output = '';
       appProcess.stdout.on('data', (data) => { output += data; });
@@ -272,6 +317,15 @@ describe('command line switches', () => {
 
     it('should set the locale', async () => testLocale('fr', 'fr'));
     it('should not set an invalid locale', async () => testLocale('asdfkl', currentLocale));
+
+    const lcAll = String(process.env.LC_ALL);
+    ifit(process.platform === 'linux')('current process has a valid LC_ALL env', async () => {
+      // The LC_ALL env should not be set to DOM locale string.
+      expect(lcAll).to.not.equal(app.getLocale());
+    });
+    ifit(process.platform === 'linux')('should not change LC_ALL', async () => testLocale('fr', lcAll, true));
+    ifit(process.platform === 'linux')('should not change LC_ALL when setting invalid locale', async () => testLocale('asdfkl', lcAll, true));
+    ifit(process.platform === 'linux')('should not change LC_ALL when --lang is not set', async () => testLocale('', lcAll, true));
   });
 
   describe('--remote-debugging-pipe switch', () => {
@@ -447,7 +501,8 @@ describe('chromium features', () => {
         show: false,
         webPreferences: {
           nodeIntegration: true,
-          nodeIntegrationInWorker: true
+          nodeIntegrationInWorker: true,
+          partition: 'sw-file-scheme-worker-spec'
         }
       });
 
@@ -458,7 +513,9 @@ describe('chromium features', () => {
           done(`unexpected error : ${message}`);
         } else if (channel === 'response') {
           expect(message).to.equal('Hello from serviceWorker!');
-          done();
+          session.fromPartition('sw-file-scheme-worker-spec').clearStorageData({
+            storages: ['serviceworkers']
+          }).then(() => done());
         }
       });
 

@@ -498,6 +498,12 @@ describe('nativeImage module', () => {
       expect(cropB.getSize()).to.deep.equal({ width: 25, height: 64 });
       expect(cropA.toPNG().equals(cropB.toPNG())).to.be.false();
     });
+
+    it('toBitmap() returns a buffer of the right size', () => {
+      const image = nativeImage.createFromPath(path.join(__dirname, 'fixtures', 'assets', 'logo.png'));
+      const crop = image.crop({ width: 25, height: 64, x: 0, y: 0 });
+      expect(crop.toBitmap().length).to.equal(25 * 64 * 4);
+    });
   });
 
   describe('getAspectRatio()', () => {
@@ -512,6 +518,32 @@ describe('nativeImage module', () => {
 
       const image = nativeImage.createFromPath(imageData.path);
       expect(image.getAspectRatio()).to.equal(expectedAspectRatio);
+    });
+  });
+
+  ifdescribe(process.platform !== 'linux')('createThumbnailFromPath(path, size)', () => {
+    it('throws when invalid size is passed', async () => {
+      const badSize = { width: -1, height: -1 };
+
+      await expect(
+        nativeImage.createThumbnailFromPath('path', badSize)
+      ).to.eventually.be.rejectedWith('size must not be empty');
+    });
+
+    it('throws when a bad path is passed', async () => {
+      const badPath = process.platform === 'win32' ? '\\hey\\hi\\hello' : '/hey/hi/hello';
+      const goodSize = { width: 100, height: 100 };
+
+      await expect(
+        nativeImage.createThumbnailFromPath(badPath, goodSize)
+      ).to.eventually.be.rejected();
+    });
+
+    it('returns native image given valid params', async () => {
+      const goodPath = path.join(__dirname, 'fixtures', 'assets', 'logo.png');
+      const goodSize = { width: 100, height: 100 };
+      const result = await nativeImage.createThumbnailFromPath(goodPath, goodSize);
+      expect(result.isEmpty()).to.equal(false);
     });
   });
 
@@ -537,11 +569,15 @@ describe('nativeImage module', () => {
         buffer: nativeImage.createFromPath(imageDataOne.path).toPNG()
       });
 
+      expect(image.getScaleFactors()).to.deep.equal([1]);
+
       const imageDataTwo = getImage({ width: 2, height: 2 });
       image.addRepresentation({
         scaleFactor: 2.0,
         buffer: nativeImage.createFromPath(imageDataTwo.path).toPNG()
       });
+
+      expect(image.getScaleFactors()).to.deep.equal([1, 2]);
 
       const imageDataThree = getImage({ width: 3, height: 3 });
       image.addRepresentation({
@@ -549,10 +585,15 @@ describe('nativeImage module', () => {
         buffer: nativeImage.createFromPath(imageDataThree.path).toPNG()
       });
 
+      expect(image.getScaleFactors()).to.deep.equal([1, 2, 3]);
+
       image.addRepresentation({
         scaleFactor: 4.0,
         buffer: 'invalid'
       });
+
+      // this one failed, so it shouldn't show up in the scale factors
+      expect(image.getScaleFactors()).to.deep.equal([1, 2, 3]);
 
       expect(image.isEmpty()).to.be.false();
       expect(image.getSize()).to.deep.equal({ width: 1, height: 1 });

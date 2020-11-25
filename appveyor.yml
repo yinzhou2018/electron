@@ -53,7 +53,9 @@ build_script:
       } else {
         node script/yarn.js install --frozen-lockfile
 
-        if ($(node script/doc-only-change.js --prNumber=$env:APPVEYOR_PULL_REQUEST_NUMBER --prBranch=$env:APPVEYOR_REPO_BRANCH;$LASTEXITCODE -eq 0)) {
+        $result = node script/doc-only-change.js --prNumber=$env:APPVEYOR_PULL_REQUEST_NUMBER --prBranch=$env:APPVEYOR_REPO_BRANCH
+        Write-Output $result
+        if ($result.ExitCode -eq 0) {
           Write-warning "Skipping build for doc only change"; Exit-AppveyorBuild
         }
       }
@@ -218,10 +220,10 @@ deploy_script:
       if (Test-Path Env:\ELECTRON_RELEASE) {
         if (Test-Path Env:\UPLOAD_TO_S3) {
           Write-Output "Uploading Electron release distribution to s3"
-          & python script\release\uploaders\upload.py --upload_to_s3
+          & python script\release\uploaders\upload.py --verbose --upload_to_s3
         } else {
           Write-Output "Uploading Electron release distribution to github releases"
-          & python script\release\uploaders\upload.py
+          & python script\release\uploaders\upload.py --verbose
         }
       } elseif (Test-Path Env:\TEST_WOA) {
         node script/release/ci-release-build.js --job=electron-woa-testing --ci=VSTS --armTest --appveyorJobId=$env:APPVEYOR_JOB_ID $env:APPVEYOR_REPO_BRANCH

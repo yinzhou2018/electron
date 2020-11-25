@@ -275,7 +275,7 @@ Session::Session(v8::Isolate* isolate, ElectronBrowserContext* browser_context)
 
 #if BUILDFLAG(ENABLE_BUILTIN_SPELLCHECKER)
   SpellcheckService* service =
-      SpellcheckServiceFactory::GetForContext(browser_context_.get());
+      SpellcheckServiceFactory::GetForContext(browser_context_);
   if (service) {
     service->SetHunspellObserver(this);
   }
@@ -288,7 +288,7 @@ Session::~Session() {
 
 #if BUILDFLAG(ENABLE_BUILTIN_SPELLCHECKER)
   SpellcheckService* service =
-      SpellcheckServiceFactory::GetForContext(browser_context_.get());
+      SpellcheckServiceFactory::GetForContext(browser_context_);
   if (service) {
     service->SetHunspellObserver(nullptr);
   }
@@ -350,7 +350,7 @@ v8::Local<v8::Promise> Session::GetCacheSize() {
   gin_helper::Promise<int64_t> promise(isolate);
   auto handle = promise.GetHandle();
 
-  content::BrowserContext::GetDefaultStoragePartition(browser_context_.get())
+  content::BrowserContext::GetDefaultStoragePartition(browser_context_)
       ->GetNetworkContext()
       ->ComputeHttpCacheSize(
           base::Time(), base::Time::Max(),
@@ -374,7 +374,7 @@ v8::Local<v8::Promise> Session::ClearCache() {
   gin_helper::Promise<void> promise(isolate);
   auto handle = promise.GetHandle();
 
-  content::BrowserContext::GetDefaultStoragePartition(browser_context_.get())
+  content::BrowserContext::GetDefaultStoragePartition(browser_context_)
       ->GetNetworkContext()
       ->ClearHttpCache(base::Time(), base::Time::Max(), nullptr,
                        base::BindOnce(gin_helper::Promise<void>::ResolvePromise,
@@ -470,17 +470,17 @@ void Session::EnableNetworkEmulation(const gin_helper::Dictionary& options) {
     conditions->latency = base::TimeDelta::FromMillisecondsD(latency);
   }
 
-  auto* network_context = content::BrowserContext::GetDefaultStoragePartition(
-                              browser_context_.get())
-                              ->GetNetworkContext();
+  auto* network_context =
+      content::BrowserContext::GetDefaultStoragePartition(browser_context_)
+          ->GetNetworkContext();
   network_context->SetNetworkConditions(network_emulation_token_,
                                         std::move(conditions));
 }
 
 void Session::DisableNetworkEmulation() {
-  auto* network_context = content::BrowserContext::GetDefaultStoragePartition(
-                              browser_context_.get())
-                              ->GetNetworkContext();
+  auto* network_context =
+      content::BrowserContext::GetDefaultStoragePartition(browser_context_)
+          ->GetNetworkContext();
   network_context->SetNetworkConditions(
       network_emulation_token_, network::mojom::NetworkConditions::New());
 }
@@ -500,7 +500,7 @@ void Session::SetCertVerifyProc(v8::Local<v8::Value> val,
         std::make_unique<CertVerifierClient>(proc),
         cert_verifier_client_remote.InitWithNewPipeAndPassReceiver());
   }
-  content::BrowserContext::GetDefaultStoragePartition(browser_context_.get())
+  content::BrowserContext::GetDefaultStoragePartition(browser_context_)
       ->GetNetworkContext()
       ->SetCertVerifierClient(std::move(cert_verifier_client_remote));
 
@@ -552,7 +552,7 @@ v8::Local<v8::Promise> Session::ClearHostResolverCache(gin::Arguments* args) {
   gin_helper::Promise<void> promise(isolate);
   v8::Local<v8::Promise> handle = promise.GetHandle();
 
-  content::BrowserContext::GetDefaultStoragePartition(browser_context_.get())
+  content::BrowserContext::GetDefaultStoragePartition(browser_context_)
       ->GetNetworkContext()
       ->ClearHostCache(nullptr,
                        base::BindOnce(gin_helper::Promise<void>::ResolvePromise,
@@ -566,7 +566,7 @@ v8::Local<v8::Promise> Session::ClearAuthCache() {
   gin_helper::Promise<void> promise(isolate);
   v8::Local<v8::Promise> handle = promise.GetHandle();
 
-  content::BrowserContext::GetDefaultStoragePartition(browser_context_.get())
+  content::BrowserContext::GetDefaultStoragePartition(browser_context_)
       ->GetNetworkContext()
       ->ClearHttpAuthCache(
           base::Time(),
@@ -592,9 +592,9 @@ void Session::AllowNTLMCredentialsForDomains(const std::string& domains) {
 void Session::SetUserAgent(const std::string& user_agent,
                            gin::Arguments* args) {
   browser_context_->SetUserAgent(user_agent);
-  auto* network_context = content::BrowserContext::GetDefaultStoragePartition(
-                              browser_context_.get())
-                              ->GetNetworkContext();
+  auto* network_context =
+      content::BrowserContext::GetDefaultStoragePartition(browser_context_)
+          ->GetNetworkContext();
   network_context->SetUserAgent(user_agent);
 
   std::string accept_lang;
@@ -683,6 +683,13 @@ v8::Local<v8::Promise> Session::LoadExtension(
   v8::Isolate* isolate = v8::Isolate::GetCurrent();
   gin_helper::Promise<const extensions::Extension*> promise(isolate);
   v8::Local<v8::Promise> handle = promise.GetHandle();
+
+  if (!extension_path.IsAbsolute()) {
+    promise.RejectWithErrorMessage(
+        "The path to the extension in 'loadExtension' must be absolute");
+    return handle;
+  }
+
   if (browser_context()->IsOffTheRecord()) {
     promise.RejectWithErrorMessage(
         "Extensions cannot be loaded in a temporary session");
@@ -780,10 +787,9 @@ v8::Local<v8::Value> Session::NetLog(v8::Isolate* isolate) {
   return net_log_.Get(isolate);
 }
 
-static void StartPreconnectOnUI(
-    scoped_refptr<ElectronBrowserContext> browser_context,
-    const GURL& url,
-    int num_sockets_to_preconnect) {
+static void StartPreconnectOnUI(ElectronBrowserContext* browser_context,
+                                const GURL& url,
+                                int num_sockets_to_preconnect) {
   std::vector<predictors::PreconnectRequest> requests = {
       {url::Origin::Create(url), num_sockets_to_preconnect,
        net::NetworkIsolationKey()}};
@@ -814,7 +820,7 @@ void Session::Preconnect(const gin_helper::Dictionary& options,
   DCHECK_GT(num_sockets_to_preconnect, 0);
   base::PostTask(
       FROM_HERE, {content::BrowserThread::UI},
-      base::BindOnce(&StartPreconnectOnUI, base::RetainedRef(browser_context_),
+      base::BindOnce(&StartPreconnectOnUI, base::Unretained(browser_context_),
                      url, num_sockets_to_preconnect));
 }
 
@@ -859,11 +865,13 @@ v8::Local<v8::Promise> Session::ListWordsInSpellCheckerDictionary() {
   v8::Local<v8::Promise> handle = promise.GetHandle();
 
   SpellcheckService* spellcheck =
-      SpellcheckServiceFactory::GetForContext(browser_context_.get());
+      SpellcheckServiceFactory::GetForContext(browser_context_);
 
-  if (!spellcheck)
+  if (!spellcheck) {
     promise.RejectWithErrorMessage(
         "Spellcheck in unexpected state: failed to load custom dictionary.");
+    return handle;
+  }
 
   if (spellcheck->GetCustomDictionary()->IsLoaded()) {
     promise.Resolve(spellcheck->GetCustomDictionary()->GetWords());
@@ -885,7 +893,7 @@ bool Session::AddWordToSpellCheckerDictionary(const std::string& word) {
     return false;
 
   SpellcheckService* service =
-      SpellcheckServiceFactory::GetForContext(browser_context_.get());
+      SpellcheckServiceFactory::GetForContext(browser_context_);
   if (!service)
     return false;
 
@@ -906,7 +914,7 @@ bool Session::RemoveWordFromSpellCheckerDictionary(const std::string& word) {
     return false;
 
   SpellcheckService* service =
-      SpellcheckServiceFactory::GetForContext(browser_context_.get());
+      SpellcheckServiceFactory::GetForContext(browser_context_);
   if (!service)
     return false;
 
@@ -922,7 +930,7 @@ bool Session::RemoveWordFromSpellCheckerDictionary(const std::string& word) {
 
 // static
 Session* Session::FromBrowserContext(content::BrowserContext* context) {
-  UserDataLink* data =
+  auto* data =
       static_cast<UserDataLink*>(context->GetUserData(kElectronApiSessionKey));
   return data ? data->session : nullptr;
 }
@@ -944,8 +952,7 @@ gin::Handle<Session> Session::CreateFrom(
   ElectronBrowserMainParts::Get()->RegisterDestructionCallback(
       base::BindOnce([](Session* session) { delete session; }, handle.get()));
 
-  App::Get()->EmitCustomEvent("session-created",
-                              handle.ToV8().As<v8::Object>());
+  App::Get()->Emit("-session-created", handle.ToV8().As<v8::Object>());
 
   return handle;
 }
@@ -954,7 +961,7 @@ gin::Handle<Session> Session::CreateFrom(
 gin::Handle<Session> Session::FromPartition(v8::Isolate* isolate,
                                             const std::string& partition,
                                             base::DictionaryValue options) {
-  scoped_refptr<ElectronBrowserContext> browser_context;
+  ElectronBrowserContext* browser_context;
   if (partition.empty()) {
     browser_context =
         ElectronBrowserContext::From("", false, std::move(options));
@@ -967,7 +974,7 @@ gin::Handle<Session> Session::FromPartition(v8::Isolate* isolate,
     browser_context =
         ElectronBrowserContext::From(partition, true, std::move(options));
   }
-  return CreateFrom(isolate, browser_context.get());
+  return CreateFrom(isolate, browser_context);
 }
 
 gin::ObjectTemplateBuilder Session::GetObjectTemplateBuilder(

@@ -32,6 +32,7 @@
 #include "shell/common/gin_helper/microtasks_scope.h"
 #include "shell/common/mac/main_application_bundle.h"
 #include "shell/common/node_includes.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_initializer.h"  // nogncheck
 
 #define ELECTRON_BUILTIN_MODULES(V)      \
   V(electron_browser_app)                \
@@ -97,24 +98,26 @@ namespace {
 
 void stop_and_close_uv_loop(uv_loop_t* loop) {
   uv_stop(loop);
-  int error = uv_loop_close(loop);
 
-  while (error) {
-    uv_run(loop, UV_RUN_DEFAULT);
-    uv_stop(loop);
-    uv_walk(
-        loop,
-        [](uv_handle_t* handle, void*) {
-          if (!uv_is_closing(handle)) {
-            uv_close(handle, nullptr);
-          }
-        },
-        nullptr);
-    uv_run(loop, UV_RUN_DEFAULT);
-    error = uv_loop_close(loop);
-  }
+  auto const ensure_closing = [](uv_handle_t* handle, void*) {
+    // We should be using the UvHandle wrapper everywhere, in which case
+    // all handles should already be in a closing state...
+    DCHECK(uv_is_closing(handle));
+    // ...but if a raw handle got through, through, do the right thing anyway
+    if (!uv_is_closing(handle)) {
+      uv_close(handle, nullptr);
+    }
+  };
 
-  DCHECK_EQ(error, 0);
+  uv_walk(loop, ensure_closing, nullptr);
+
+  // All remaining handles are in a closing state now.
+  // Pump the event loop so that they can finish closing.
+  for (;;)
+    if (uv_run(loop, UV_RUN_DEFAULT) == 0)
+      break;
+
+  DCHECK_EQ(0, uv_loop_alive(loop));
 }
 
 bool g_is_initialized = false;
@@ -223,9 +226,18 @@ void SetNodeOptions(base::Environment* env) {
 
 bool AllowWasmCodeGenerationCallback(v8::Local<v8::Context> context,
                                      v8::Local<v8::String>) {
-  v8::Local<v8::Value> wasm_code_gen = context->GetEmbedderData(
-      node::ContextEmbedderIndex::kAllowWasmCodeGeneration);
-  return wasm_code_gen->IsUndefined() || wasm_code_gen->IsTrue();
+  // If we're running with contextIsolation enabled in the renderer process,
+  // fall back to Blink's logic.
+  v8::Isolate* isolate = context->GetIsolate();
+  if (node::Environment::GetCurrent(isolate) == nullptr) {
+    if (gin_helper::Locker::IsBrowserProcess())
+      return false;
+    return blink::V8Initializer::WasmCodeGenerationCheckCallbackInMainThread(
+        context, v8::String::Empty(isolate));
+  }
+
+  return node::Environment::AllowWasmCodeGenerationCallback(
+      context, v8::String::Empty(isolate));
 }
 
 }  // namespace
@@ -282,7 +294,7 @@ NodeBindings::~NodeBindings() {
 
   // Clear uv.
   uv_sem_destroy(&embed_sem_);
-  uv_close(reinterpret_cast<uv_handle_t*>(&dummy_uv_handle_), nullptr);
+  dummy_uv_handle_.reset();
 
   // Clean up worker loop
   if (in_worker_loop())
@@ -391,9 +403,24 @@ node::Environment* NodeBindings::CreateEnvironment(
   std::unique_ptr<const char*[]> c_argv = StringVectorToArgArray(args);
   isolate_data_ =
       node::CreateIsolateData(context->GetIsolate(), uv_loop_, platform);
-  node::Environment* env = node::CreateEnvironment(
-      isolate_data_, context, args.size(), c_argv.get(), 0, nullptr);
-  DCHECK(env);
+
+  node::Environment* env;
+  if (browser_env_ != BrowserEnvironment::BROWSER) {
+    v8::TryCatch try_catch(context->GetIsolate());
+    env = node::CreateEnvironment(isolate_data_, context, args.size(),
+                                  c_argv.get(), 0, nullptr);
+    DCHECK(env);
+    // This will only be caught when something has gone terrible wrong as all
+    // electron scripts are wrapped in a try {} catch {} in run-compiler.js
+    if (try_catch.HasCaught()) {
+      LOG(ERROR) << "Failed to initialize node environment in process: "
+                 << process_type;
+    }
+  } else {
+    env = node::CreateEnvironment(isolate_data_, context, args.size(),
+                                  c_argv.get(), 0, nullptr);
+    DCHECK(env);
+  }
 
   // Clean up the global _noBrowserGlobals that we unironically injected into
   // the global scope
@@ -445,7 +472,7 @@ void NodeBindings::LoadEnvironment(node::Environment* env) {
 void NodeBindings::PrepareMessageLoop() {
   // Add dummy handle for libuv, otherwise libuv would quit when there is
   // nothing to do.
-  uv_async_init(uv_loop_, &dummy_uv_handle_, nullptr);
+  uv_async_init(uv_loop_, dummy_uv_handle_.get(), nullptr);
 
   // Start worker that will interrupt main loop when having uv events.
   uv_sem_init(&embed_sem_, 0);
@@ -502,13 +529,12 @@ void NodeBindings::WakeupMainThread() {
 }
 
 void NodeBindings::WakeupEmbedThread() {
-  if (!in_worker_loop())
-    uv_async_send(&dummy_uv_handle_);
+  uv_async_send(dummy_uv_handle_.get());
 }
 
 // static
 void NodeBindings::EmbedThreadRunner(void* arg) {
-  NodeBindings* self = static_cast<NodeBindings*>(arg);
+  auto* self = static_cast<NodeBindings*>(arg);
 
   while (true) {
     // Wait for the main loop to deal with events.

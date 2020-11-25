@@ -8,13 +8,10 @@
 
 #include <utility>
 
-#if defined(OS_LINUX)
-#include <glib.h>  // for g_setenv()
-#endif
-
 #include "base/base_switches.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
+#include "base/optional.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
@@ -51,6 +48,7 @@
 #include "shell/common/node_bindings.h"
 #include "shell/common/node_includes.h"
 #include "ui/base/idle/idle.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/ui_base_switches.h"
 
 #if defined(USE_AURA)
@@ -79,7 +77,6 @@
 
 #if defined(OS_WIN)
 #include "ui/base/cursor/cursor_loader_win.h"
-#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/l10n_util_win.h"
 #include "ui/display/win/dpi.h"
 #include "ui/gfx/system_fonts_win.h"
@@ -359,9 +356,47 @@ int ElectronBrowserMainParts::PreCreateThreads() {
   if (!views::LayoutProvider::Get())
     layout_provider_ = std::make_unique<views::LayoutProvider>();
 
+  auto* command_line = base::CommandLine::ForCurrentProcess();
+  std::string locale = command_line->GetSwitchValueASCII(::switches::kLang);
+
+#if defined(OS_MAC)
+  // The browser process only wants to support the language Cocoa will use,
+  // so force the app locale to be overridden with that value. This must
+  // happen before the ResourceBundle is loaded
+  if (locale.empty())
+    l10n_util::OverrideLocaleWithCocoaLocale();
+#elif defined(OS_LINUX)
+  // l10n_util::GetApplicationLocaleInternal uses g_get_language_names(),
+  // which keys off of getenv("LC_ALL").
+  // We must set this env first to make ui::ResourceBundle accept the custom
+  // locale.
+  std::unique_ptr<base::Environment> env(base::Environment::Create());
+  base::Optional<std::string> lc_all;
+  if (!locale.empty()) {
+    std::string str;
+    if (env->GetVar("LC_ALL", &str))
+      lc_all.emplace(std::move(str));
+    env->SetVar("LC_ALL", locale.c_str());
+  }
+#endif
+
+  // Load resources bundle according to locale.
+  std::string loaded_locale = LoadResourceBundle(locale);
+
   // Initialize the app locale.
-  fake_browser_process_->SetApplicationLocale(
-      ElectronBrowserClient::Get()->GetApplicationLocale());
+  std::string app_locale = l10n_util::GetApplicationLocale(loaded_locale);
+  ElectronBrowserClient::SetApplicationLocale(app_locale);
+  fake_browser_process_->SetApplicationLocale(app_locale);
+
+#if defined(OS_LINUX)
+  // Reset to the original LC_ALL since we should not be changing it.
+  if (!locale.empty()) {
+    if (lc_all)
+      env->SetVar("LC_ALL", *lc_all);
+    else
+      env->UnSetVar("LC_ALL");
+  }
+#endif
 
   // Force MediaCaptureDevicesDispatcher to be created on UI thread.
   MediaCaptureDevicesDispatcher::GetInstance();
@@ -469,11 +504,6 @@ void ElectronBrowserMainParts::PreMainMessageLoopRun() {
   ui::TouchFactory::SetTouchDeviceListFromCommandLine();
 #endif
 
-  // Start idle gc.
-  gc_timer_.Start(FROM_HERE, base::TimeDelta::FromMinutes(1),
-                  base::BindRepeating(&v8::Isolate::LowMemoryNotification,
-                                      base::Unretained(js_env_->isolate())));
-
   content::WebUIControllerFactory::RegisterFactory(
       ElectronWebUIControllerFactory::GetInstance());
 
@@ -551,7 +581,10 @@ void ElectronBrowserMainParts::PostMainMessageLoopRun() {
   node_debugger_->Stop();
   node_env_->env()->set_trace_sync_io(false);
   js_env_->OnMessageLoopDestroying();
+  node::Stop(node_env_->env());
   node_env_.reset();
+
+  ElectronBrowserContext::browser_context_map().clear();
 
   fake_browser_process_->PostMainMessageLoopRun();
   content::DevToolsAgentHost::StopRemoteDebuggingPipeHandler();

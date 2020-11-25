@@ -751,8 +751,10 @@ void TopLevelWindow::AddBrowserView(v8::Local<v8::Value> value) {
       gin::ConvertFromV8(isolate(), value, &browser_view)) {
     auto get_that_view = browser_views_.find(browser_view->weak_map_id());
     if (get_that_view == browser_views_.end()) {
-      window_->AddBrowserView(browser_view->view());
-      browser_view->web_contents()->SetOwnerWindow(window_.get());
+      if (browser_view->web_contents()) {
+        window_->AddBrowserView(browser_view->view());
+        browser_view->web_contents()->SetOwnerWindow(window_.get());
+      }
       browser_views_[browser_view->weak_map_id()].Reset(isolate(), value);
     }
   }
@@ -764,9 +766,10 @@ void TopLevelWindow::RemoveBrowserView(v8::Local<v8::Value> value) {
       gin::ConvertFromV8(isolate(), value, &browser_view)) {
     auto get_that_view = browser_views_.find(browser_view->weak_map_id());
     if (get_that_view != browser_views_.end()) {
-      window_->RemoveBrowserView(browser_view->view());
-      browser_view->web_contents()->SetOwnerWindow(nullptr);
-
+      if (browser_view->web_contents()) {
+        window_->RemoveBrowserView(browser_view->view());
+        browser_view->web_contents()->SetOwnerWindow(nullptr);
+      }
       (*get_that_view).second.Reset(isolate(), value);
       browser_views_.erase(get_that_view);
     }
@@ -809,8 +812,13 @@ void TopLevelWindow::SetOverlayIcon(const gfx::Image& overlay,
   window_->SetOverlayIcon(overlay, description);
 }
 
-void TopLevelWindow::SetVisibleOnAllWorkspaces(bool visible) {
-  return window_->SetVisibleOnAllWorkspaces(visible);
+void TopLevelWindow::SetVisibleOnAllWorkspaces(bool visible,
+                                               gin_helper::Arguments* args) {
+  gin_helper::Dictionary options;
+  bool visibleOnFullScreen = false;
+  args->GetNext(&options) &&
+      options.Get("visibleOnFullScreen", &visibleOnFullScreen);
+  return window_->SetVisibleOnAllWorkspaces(visible, visibleOnFullScreen);
 }
 
 bool TopLevelWindow::IsVisibleOnAllWorkspaces() {
@@ -919,6 +927,10 @@ void TopLevelWindow::CloseFilePreview() {
   window_->CloseFilePreview();
 }
 
+void TopLevelWindow::SetGTKDarkThemeEnabled(bool use_dark_theme) {
+  window_->SetGTKDarkThemeEnabled(use_dark_theme);
+}
+
 v8::Local<v8::Value> TopLevelWindow::GetContentView() const {
   if (content_view_.IsEmpty())
     return v8::Null(isolate());
@@ -939,7 +951,7 @@ std::vector<v8::Local<v8::Object>> TopLevelWindow::GetChildWindows() const {
 
 v8::Local<v8::Value> TopLevelWindow::GetBrowserView(
     gin_helper::Arguments* args) const {
-  if (browser_views_.size() == 0) {
+  if (browser_views_.empty()) {
     return v8::Null(isolate());
   } else if (browser_views_.size() == 1) {
     auto first_view = browser_views_.begin();
@@ -1055,8 +1067,10 @@ void TopLevelWindow::ResetBrowserViews() {
                            v8::Local<v8::Value>::New(isolate(), item.second),
                            &browser_view) &&
         !browser_view.IsEmpty()) {
-      window_->RemoveBrowserView(browser_view->view());
-      browser_view->web_contents()->SetOwnerWindow(nullptr);
+      if (browser_view->web_contents()) {
+        window_->RemoveBrowserView(browser_view->view());
+        browser_view->web_contents()->SetOwnerWindow(nullptr);
+      }
     }
 
     item.second.Reset();

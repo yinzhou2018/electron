@@ -370,6 +370,7 @@ source_set("electron_lib") {
     "//third_party/libyuv",
     "//third_party/webrtc_overrides:webrtc_component",
     "//third_party/widevine/cdm:headers",
+    "//third_party/zlib/google:zip",
     "//ui/base/idle",
     "//ui/events:dom_keycode_converter",
     "//ui/gl",
@@ -674,6 +675,14 @@ source_set("electron_lib") {
       "shell/browser/electron_pdf_web_contents_helper_client.cc",
       "shell/browser/electron_pdf_web_contents_helper_client.h",
     ]
+  }
+
+  if (is_win && enable_win_dark_mode_window_ui) {
+    sources += [
+      "shell/browser/win/dark_mode.cc",
+      "shell/browser/win/dark_mode.h",
+    ]
+    libs += [ "uxtheme.lib" ]
   }
 }
 
@@ -1094,20 +1103,17 @@ if (is_mac) {
         "//components/crash/core/app:run_as_crashpad_handler",
       ]
 
+      ldflags = []
+
       libs = [
         "comctl32.lib",
         "uiautomationcore.lib",
         "wtsapi32.lib",
       ]
 
-      configs += [ "//build/config/win:windowed" ]
-
-      ldflags = [
-        # Windows 7 doesn't have these DLLs.
-        # TODO: are there other DLLs we need to list here to be win7
-        # compatible?
-        "/DELAYLOAD:api-ms-win-core-winrt-l1-1-0.dll",
-        "/DELAYLOAD:api-ms-win-core-winrt-string-l1-1-0.dll",
+      configs += [
+        "//build/config/win:windowed",
+        "//build/config/win:delayloads",
       ]
 
       # This is to support renaming of electron.exe. node-gyp has hard-coded

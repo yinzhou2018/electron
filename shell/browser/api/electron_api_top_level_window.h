@@ -181,7 +181,7 @@ class TopLevelWindow : public gin_helper::TrackableObject<TopLevelWindow>,
   void SetProgressBar(double progress, gin_helper::Arguments* args);
   void SetOverlayIcon(const gfx::Image& overlay,
                       const std::string& description);
-  void SetVisibleOnAllWorkspaces(bool visible);
+  void SetVisibleOnAllWorkspaces(bool visible, gin_helper::Arguments* args);
   bool IsVisibleOnAllWorkspaces();
   void SetAutoHideCursor(bool auto_hide);
   virtual void SetVibrancy(v8::Isolate* isolate, v8::Local<v8::Value> value);
@@ -208,6 +208,7 @@ class TopLevelWindow : public gin_helper::TrackableObject<TopLevelWindow>,
   void SetAspectRatio(double aspect_ratio, gin_helper::Arguments* args);
   void PreviewFile(const std::string& path, gin_helper::Arguments* args);
   void CloseFilePreview();
+  void SetGTKDarkThemeEnabled(bool use_dark_theme);
 
   // Public getters of NativeWindow.
   v8::Local<v8::Value> GetContentView() const;

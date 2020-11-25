@@ -364,7 +364,7 @@ Returns:
     * `killed` - Process was sent a SIGTERM or otherwise killed externally
     * `crashed` - Process crashed
     * `oom` - Process ran out of memory
-    * `launch-failure` - Process never successfully launched
+    * `launch-failed` - Process never successfully launched
     * `integrity-failure` - Windows code integrity checks failed
 
 Emitted when the renderer process unexpectedly dissapears.  This is normally
@@ -1296,9 +1296,9 @@ Returns [`PrinterInfo[]`](structures/printer-info.md)
   * `pagesPerSheet` Number (optional) - The number of pages to print per page sheet.
   * `collate` Boolean (optional) - Whether the web page should be collated.
   * `copies` Number (optional) - The number of copies of the web page to print.
-  * `pageRanges` Record<string, number> (optional) - The page range to print.
-    * `from` Number - the start page.
-    * `to` Number - the end page.
+  * `pageRanges` Object[] (optional) - The page range to print. On macOS, only one range is honored.
+    * `from` Number - Index of the first page to print (0-based).
+    * `to` Number - Index of the last page to print (inclusive) (0-based).
   * `duplexMode` String (optional) - Set the duplex mode of the printed web page. Can be `simplex`, `shortEdge`, or `longEdge`.
   * `dpi` Record<string, number> (optional)
     * `horizontal` Number (optional) - The horizontal dpi.
@@ -1338,8 +1338,8 @@ win.webContents.print(options, (success, errorType) => {
     default margin, 1 for no margin, and 2 for minimum margin.
   * `scaleFactor` Number (optional) - The scale factor of the web page. Can range from 0 to 100.
   * `pageRanges` Record<string, number> (optional) - The page range to print.
-    * `from` Number - the first page to print.
-    * `to` Number - the last page to print (inclusive).
+    * `from` Number - Index of the first page to print (0-based).
+    * `to` Number - Index of the last page to print (inclusive) (0-based).
   * `pageSize` String | Size (optional) - Specify page size of the generated PDF. Can be `A3`,
   `A4`, `A5`, `Legal`, `Letter`, `Tabloid` or an Object containing `height` and `width` in microns.
   * `printBackground` Boolean (optional) - Whether to print CSS backgrounds.

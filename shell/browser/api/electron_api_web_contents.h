@@ -28,6 +28,7 @@
 #include "shell/browser/api/frame_subscriber.h"
 #include "shell/browser/api/save_page_handler.h"
 #include "shell/browser/common_web_contents_delegate.h"
+#include "shell/browser/extended_web_contents_observer.h"
 #include "shell/common/gin_helper/trackable_object.h"
 #include "ui/gfx/image/image.h"
 
@@ -43,6 +44,8 @@
 #endif
 
 #if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)
+#include "extensions/common/view_type.h"
+
 namespace extensions {
 class ScriptExecutor;
 }
@@ -111,22 +114,6 @@ class OffScreenRenderWidgetHostView;
 
 namespace api {
 
-// Certain events are only in WebContentsDelegate, provide our own Observer to
-// dispatch those events.
-class ExtendedWebContentsObserver : public base::CheckedObserver {
- public:
-  virtual void OnCloseContents() {}
-  virtual void OnDraggableRegionsUpdated(
-      const std::vector<mojom::DraggableRegionPtr>& regions) {}
-  virtual void OnSetContentBounds(const gfx::Rect& rect) {}
-  virtual void OnActivateContents() {}
-  virtual void OnPageTitleUpdated(const base::string16& title,
-                                  bool explicit_set) {}
-
- protected:
-  ~ExtendedWebContentsObserver() override {}
-};
-
 // Wrapper around the content::WebContents.
 class WebContents : public gin_helper::TrackableObject<WebContents>,
                     public CommonWebContentsDelegate,
@@ -134,7 +121,7 @@ class WebContents : public gin_helper::TrackableObject<WebContents>,
                     public mojom::ElectronBrowser {
  public:
   enum class Type {
-    BACKGROUND_PAGE,  // A DevTools extension background page.
+    BACKGROUND_PAGE,  // An extension background page.
     BROWSER_WINDOW,   // Used by BrowserWindow.
     BROWSER_VIEW,     // Used by BrowserView.
     REMOTE,           // Thin wrap around an existing WebContents.
@@ -244,7 +231,7 @@ class WebContents : public gin_helper::TrackableObject<WebContents>,
                            bool silent,
                            base::string16 default_printer);
   void Print(gin_helper::Arguments* args);
-  std::vector<printing::PrinterBasicInfo> GetPrinterList();
+  printing::PrinterList GetPrinterList();
   // Print current page as PDF.
   v8::Local<v8::Promise> PrintToPDF(base::DictionaryValue settings);
 #endif
@@ -376,6 +363,7 @@ class WebContents : public gin_helper::TrackableObject<WebContents>,
   content::WebContents* HostWebContents() const;
   v8::Local<v8::Value> DevToolsWebContents(v8::Isolate* isolate);
   v8::Local<v8::Value> Debugger(v8::Isolate* isolate);
+  bool WasInitiallyShown();
 
   WebContentsZoomController* GetZoomController() { return zoom_controller_; }
 
@@ -415,6 +403,12 @@ class WebContents : public gin_helper::TrackableObject<WebContents>,
       std::unique_ptr<content::WebContents> web_contents,
       gin::Handle<class Session> session,
       const gin_helper::Dictionary& options);
+
+#if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)
+  void InitWithExtensionView(v8::Isolate* isolate,
+                             content::WebContents* web_contents,
+                             extensions::ViewType view_type);
+#endif
 
   // content::WebContentsDelegate:
   bool DidAddMessageToConsole(content::WebContents* source,
@@ -560,6 +554,7 @@ class WebContents : public gin_helper::TrackableObject<WebContents>,
   void DevToolsFocused() override;
   void DevToolsOpened() override;
   void DevToolsClosed() override;
+  void DevToolsResized() override;
 
  private:
   ElectronBrowserContext* GetBrowserContext() const;
@@ -586,6 +581,7 @@ class WebContents : public gin_helper::TrackableObject<WebContents>,
               const std::string& channel,
               blink::CloneableMessage arguments,
               InvokeCallback callback) override;
+  void OnFirstNonEmptyLayout() override;
   void ReceivePostMessage(const std::string& channel,
                           blink::TransferableMessage message) override;
   void MessageSync(bool internal,
@@ -649,6 +645,8 @@ class WebContents : public gin_helper::TrackableObject<WebContents>,
 
   // Observers of this WebContents.
   base::ObserverList<ExtendedWebContentsObserver> observers_;
+
+  bool initially_shown_ = true;
 
   // The ID of the process of the currently committed RenderViewHost.
   // -1 means no speculative RVH has been committed yet.

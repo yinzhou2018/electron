@@ -492,10 +492,10 @@ void OnClientCertificateSelected(
       data.c_str(), data.length(), net::X509Certificate::FORMAT_AUTO);
   if (!certs.empty()) {
     scoped_refptr<net::X509Certificate> cert(certs[0].get());
-    for (size_t i = 0; i < identities->size(); ++i) {
-      if (cert->EqualsExcludingChain((*identities)[i]->certificate())) {
+    for (auto& identity : *identities) {
+      if (cert->EqualsExcludingChain(identity->certificate())) {
         net::ClientCertIdentity::SelfOwningAcquirePrivateKey(
-            std::move((*identities)[i]),
+            std::move(identity),
             base::BindRepeating(&GotPrivateKey, delegate, std::move(cert)));
         break;
       }
@@ -755,7 +755,7 @@ base::OnceClosure App::SelectClientCertificate(
 
   auto shared_identities =
       std::make_shared<net::ClientCertIdentityList>(std::move(identities));
-
+  v8::HandleScope handle_scope(isolate());
   bool prevent_default =
       Emit("select-client-certificate",
            WebContents::FromOrCreate(isolate(), web_contents),
@@ -1127,10 +1127,10 @@ void App::ImportCertificate(gin_helper::ErrorThrower thrower,
     return;
   }
 
-  auto browser_context = ElectronBrowserContext::From("", false);
+  auto* browser_context = ElectronBrowserContext::From("", false);
   if (!certificate_manager_model_) {
     CertificateManagerModel::Create(
-        browser_context.get(),
+        browser_context,
         base::BindOnce(&App::OnCertificateManagerModelCreated,
                        base::Unretained(this), std::move(options),
                        std::move(callback)));

@@ -20,6 +20,7 @@
 #include "content/public/browser/desktop_media_id.h"
 #include "shell/browser/api/electron_api_web_contents.h"
 #include "shell/browser/native_browser_view_views.h"
+#include "shell/browser/ui/drag_util.h"
 #include "shell/browser/ui/inspectable_web_contents.h"
 #include "shell/browser/ui/inspectable_web_contents_view.h"
 #include "shell/browser/ui/views/root_view.h"
@@ -34,7 +35,6 @@
 #include "ui/base/hit_test.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/native_widget_types.h"
-#include "ui/native_theme/native_theme.h"
 #include "ui/views/background.h"
 #include "ui/views/controls/webview/unhandled_keyboard_event_handler.h"
 #include "ui/views/controls/webview/webview.h"
@@ -214,10 +214,10 @@ NativeWindowViews::NativeWindowViews(const gin_helper::Dictionary& options,
   window_state_watcher_ = std::make_unique<WindowStateWatcher>(this);
 
   // Set _GTK_THEME_VARIANT to dark if we have "dark-theme" option set.
-  bool use_dark_theme =
-      ui::NativeTheme::GetInstanceForNativeUi()->ShouldUseDarkColors();
-  options.Get(options::kDarkTheme, &use_dark_theme);
-  SetGTKDarkThemeEnabled(use_dark_theme);
+  bool use_dark_theme = false;
+  if (options.Get(options::kDarkTheme, &use_dark_theme) && use_dark_theme) {
+    SetGTKDarkThemeEnabled(use_dark_theme);
+  }
 
   // Before the window is mapped the SetWMSpecState can not work, so we have
   // to manually set the _NET_WM_STATE.
@@ -324,6 +324,20 @@ NativeWindowViews::~NativeWindowViews() {
   aura::Window* window = GetNativeWindow();
   if (window)
     window->RemovePreTargetHandler(this);
+#endif
+}
+
+void NativeWindowViews::SetGTKDarkThemeEnabled(bool use_dark_theme) {
+#if defined(USE_X11)
+  if (use_dark_theme) {
+    ui::SetStringProperty(GetAcceleratedWidget(),
+                          gfx::GetAtom("_GTK_THEME_VARIANT"),
+                          gfx::GetAtom("UTF8_STRING"), "dark");
+  } else {
+    ui::SetStringProperty(GetAcceleratedWidget(),
+                          gfx::GetAtom("_GTK_THEME_VARIANT"),
+                          gfx::GetAtom("UTF8_STRING"), "light");
+  }
 #endif
 }
 
@@ -1057,8 +1071,10 @@ void NativeWindowViews::AddBrowserView(NativeBrowserView* view) {
 
   add_browser_view(view);
 
-  content_view()->AddChildView(
-      view->GetInspectableWebContentsView()->GetView());
+  auto* iwc_view = view->GetInspectableWebContentsView();
+  if (!iwc_view)
+    return;
+  content_view()->AddChildView(iwc_view->GetView());
 }
 
 void NativeWindowViews::RemoveBrowserView(NativeBrowserView* view) {
@@ -1069,8 +1085,11 @@ void NativeWindowViews::RemoveBrowserView(NativeBrowserView* view) {
     return;
   }
 
-  content_view()->RemoveChildView(
-      view->GetInspectableWebContentsView()->GetView());
+  auto* iwc_view = view->GetInspectableWebContentsView();
+  if (!iwc_view)
+    return;
+
+  content_view()->RemoveChildView(iwc_view->GetView());
   remove_browser_view(view);
 }
 
@@ -1150,7 +1169,8 @@ bool NativeWindowViews::IsMenuBarVisible() {
   return root_view_->IsMenuBarVisible();
 }
 
-void NativeWindowViews::SetVisibleOnAllWorkspaces(bool visible) {
+void NativeWindowViews::SetVisibleOnAllWorkspaces(bool visible,
+                                                  bool visibleOnFullScreen) {
   widget()->SetVisibleOnAllWorkspaces(visible);
 }
 
@@ -1261,8 +1281,8 @@ gfx::Rect NativeWindowViews::WindowBoundsToContentBounds(
 }
 
 void NativeWindowViews::UpdateDraggableRegions(
-    std::unique_ptr<SkRegion> region) {
-  draggable_region_ = std::move(region);
+    const std::vector<mojom::DraggableRegionPtr>& regions) {
+  draggable_region_ = DraggableRegionsToSkRegion(regions);
 }
 
 #if defined(OS_WIN)
@@ -1282,20 +1302,6 @@ void NativeWindowViews::SetIcon(const gfx::ImageSkia& icon) {
   auto* tree_host = views::DesktopWindowTreeHostLinux::GetHostForWidget(
       GetAcceleratedWidget());
   tree_host->SetWindowIcons(icon, {});
-}
-#endif
-
-#if defined(USE_X11)
-void NativeWindowViews::SetGTKDarkThemeEnabled(bool use_dark_theme) {
-  if (use_dark_theme) {
-    ui::SetStringProperty(GetAcceleratedWidget(),
-                          gfx::GetAtom("_GTK_THEME_VARIANT"),
-                          gfx::GetAtom("UTF8_STRING"), "dark");
-  } else {
-    ui::SetStringProperty(GetAcceleratedWidget(),
-                          gfx::GetAtom("_GTK_THEME_VARIANT"),
-                          gfx::GetAtom("UTF8_STRING"), "light");
-  }
 }
 #endif
 
@@ -1330,8 +1336,7 @@ void NativeWindowViews::OnWidgetBoundsChanged(views::Widget* changed_widget,
     int width_delta = new_bounds.width() - widget_size_.width();
     int height_delta = new_bounds.height() - widget_size_.height();
     for (NativeBrowserView* item : browser_views()) {
-      NativeBrowserViewViews* native_view =
-          static_cast<NativeBrowserViewViews*>(item);
+      auto* native_view = static_cast<NativeBrowserViewViews*>(item);
       native_view->SetAutoResizeProportions(widget_size_);
       native_view->AutoResize(new_bounds, width_delta, height_delta);
     }
@@ -1399,7 +1404,7 @@ bool NativeWindowViews::ShouldDescendIntoChildForEventHandling(
 
   // And the events on border for dragging resizable frameless window.
   if (!has_frame() && CanResize()) {
-    FramelessView* frame =
+    auto* frame =
         static_cast<FramelessView*>(widget()->non_client_view()->frame_view());
     return frame->ResizingBorderHitTest(location) == HTNOWHERE;
   }
