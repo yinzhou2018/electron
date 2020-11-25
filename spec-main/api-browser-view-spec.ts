@@ -134,20 +134,31 @@ describe('BrowserView module', () => {
       w.addBrowserView(view2);
       defer(() => w.removeBrowserView(view2));
     });
+
     it('does not throw if called multiple times with same view', () => {
       view = new BrowserView();
       w.addBrowserView(view);
       w.addBrowserView(view);
       w.addBrowserView(view);
     });
+
+    it('does not crash if the BrowserView webContents are destroyed prior to window removal', () => {
+      expect(() => {
+        const view1 = new BrowserView();
+        (view1.webContents as any).destroy();
+        w.addBrowserView(view1);
+      }).to.not.throw();
+    });
   });
 
   describe('BrowserWindow.removeBrowserView()', () => {
     it('does not throw if called multiple times with same view', () => {
-      view = new BrowserView();
-      w.addBrowserView(view);
-      w.removeBrowserView(view);
-      w.removeBrowserView(view);
+      expect(() => {
+        view = new BrowserView();
+        w.addBrowserView(view);
+        w.removeBrowserView(view);
+        w.removeBrowserView(view);
+      }).to.not.throw();
     });
   });
 
@@ -214,16 +225,16 @@ describe('BrowserView module', () => {
   });
 
   describe('window.open()', () => {
-    it('works in BrowserView', async () => {
+    it('works in BrowserView', (done) => {
       view = new BrowserView();
       w.setBrowserView(view);
-      const newWindow = emittedOnce(view.webContents, 'new-window');
-      view.webContents.once('new-window', event => event.preventDefault());
+      view.webContents.setWindowOpenHandler(({ url, frameName }) => {
+        expect(url).to.equal('http://host/');
+        expect(frameName).to.equal('host');
+        done();
+        return { action: 'deny' };
+      });
       view.webContents.loadFile(path.join(fixtures, 'pages', 'window-open.html'));
-      const [, url, frameName,,, additionalFeatures] = await newWindow;
-      expect(url).to.equal('http://host/');
-      expect(frameName).to.equal('host');
-      expect(additionalFeatures[0]).to.equal('this-is-not-a-standard-feature');
     });
   });
 });

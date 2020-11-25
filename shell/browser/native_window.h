@@ -148,6 +148,7 @@ class NativeWindow : public base::SupportsUserData,
   virtual bool IsSimpleFullScreen() = 0;
   virtual void SetKiosk(bool kiosk) = 0;
   virtual bool IsKiosk() = 0;
+  virtual bool IsTabletMode() const;
   virtual void SetBackgroundColor(SkColor color) = 0;
   virtual SkColor GetBackgroundColor() = 0;
   virtual void SetHasShadow(bool has_shadow) = 0;
@@ -185,7 +186,8 @@ class NativeWindow : public base::SupportsUserData,
                               const std::string& description) = 0;
 
   // Workspace APIs.
-  virtual void SetVisibleOnAllWorkspaces(bool visible) = 0;
+  virtual void SetVisibleOnAllWorkspaces(bool visible,
+                                         bool visibleOnFullScreen = false) = 0;
 
   virtual bool IsVisibleOnAllWorkspaces() = 0;
 
@@ -233,6 +235,8 @@ class NativeWindow : public base::SupportsUserData,
                            const std::string& display_name);
   virtual void CloseFilePreview();
 
+  virtual void SetGTKDarkThemeEnabled(bool use_dark_theme) = 0;
+
   // Converts between content bounds and window bounds.
   virtual gfx::Rect ContentBoundsToWindowBounds(
       const gfx::Rect& bounds) const = 0;
@@ -267,6 +271,7 @@ class NativeWindow : public base::SupportsUserData,
   void NotifyWindowWillResize(const gfx::Rect& new_bounds,
                               bool* prevent_default);
   void NotifyWindowResize();
+  void NotifyWindowResized();
   void NotifyWindowWillMove(const gfx::Rect& new_bounds, bool* prevent_default);
   void NotifyWindowMoved();
   void NotifyWindowScrollTouchBegin();
@@ -284,6 +289,7 @@ class NativeWindow : public base::SupportsUserData,
   void NotifyTouchBarItemInteraction(const std::string& item_id,
                                      const base::DictionaryValue& details);
   void NotifyNewWindowForTab();
+  void NotifyWindowSystemContextMenu(int x, int y, bool* prevent_default);
 
 #if defined(OS_WIN)
   void NotifyWindowMessage(UINT message, WPARAM w_param, LPARAM l_param);

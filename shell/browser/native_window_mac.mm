@@ -262,11 +262,33 @@ struct Converter<electron::NativeWindowMac::TitleBarStyle> {
     if (!ConvertFromV8(isolate, val, &title_bar_style))
       return false;
     if (title_bar_style == "hidden") {
-      *out = TitleBarStyle::HIDDEN;
+      *out = TitleBarStyle::kHidden;
     } else if (title_bar_style == "hiddenInset") {
-      *out = TitleBarStyle::HIDDEN_INSET;
+      *out = TitleBarStyle::kHiddenInset;
     } else if (title_bar_style == "customButtonsOnHover") {
-      *out = TitleBarStyle::CUSTOM_BUTTONS_ON_HOVER;
+      *out = TitleBarStyle::kCustomButtonsOnHover;
+    } else {
+      return false;
+    }
+    return true;
+  }
+};
+
+template <>
+struct Converter<electron::NativeWindowMac::VisualEffectState> {
+  static bool FromV8(v8::Isolate* isolate,
+                     v8::Handle<v8::Value> val,
+                     electron::NativeWindowMac::VisualEffectState* out) {
+    using VisualEffectState = electron::NativeWindowMac::VisualEffectState;
+    std::string visual_effect_state;
+    if (!ConvertFromV8(isolate, val, &visual_effect_state))
+      return false;
+    if (visual_effect_state == "followWindow") {
+      *out = VisualEffectState::kFollowWindow;
+    } else if (visual_effect_state == "active") {
+      *out = VisualEffectState::kActive;
+    } else if (visual_effect_state == "inactive") {
+      *out = VisualEffectState::kInactive;
     } else {
       return false;
     }
@@ -344,6 +366,7 @@ NativeWindowMac::NativeWindowMac(const gin_helper::Dictionary& options,
   options.Get(options::kFullscreenWindowTitle, &fullscreen_window_title_);
   options.Get(options::kSimpleFullScreen, &always_simple_fullscreen_);
   options.Get(options::kTrafficLightPosition, &traffic_light_position_);
+  options.Get(options::kVisualEffectState, &visual_effect_state_);
 
   bool minimizable = true;
   options.Get(options::kMinimizable, &minimizable);
@@ -369,8 +392,7 @@ NativeWindowMac::NativeWindowMac(const gin_helper::Dictionary& options,
   }
 
   NSUInteger styleMask = NSWindowStyleMaskTitled;
-  bool customOnHover =
-      title_bar_style_ == TitleBarStyle::CUSTOM_BUTTONS_ON_HOVER;
+  bool customOnHover = title_bar_style_ == TitleBarStyle::kCustomButtonsOnHover;
   if (customOnHover && (!useStandardWindow || transparent() || !has_frame()))
     styleMask = NSWindowStyleMaskFullSizeContentView;
 
@@ -382,7 +404,7 @@ NativeWindowMac::NativeWindowMac(const gin_helper::Dictionary& options,
     styleMask |= NSResizableWindowMask;
 
   // The window without titlebar is treated the same with frameless window.
-  if (title_bar_style_ != TitleBarStyle::NORMAL)
+  if (title_bar_style_ != TitleBarStyle::kNormal)
     set_has_frame(false);
   if (!useStandardWindow || transparent() || !has_frame())
     styleMask |= NSTexturedBackgroundWindowMask;
@@ -447,12 +469,12 @@ NativeWindowMac::NativeWindowMac(const gin_helper::Dictionary& options,
   }
 
   // Hide the title bar background
-  if (title_bar_style_ != TitleBarStyle::NORMAL) {
+  if (title_bar_style_ != TitleBarStyle::kNormal) {
     [window_ setTitlebarAppearsTransparent:YES];
   }
 
   // Hide the title bar.
-  if (title_bar_style_ == TitleBarStyle::HIDDEN_INSET) {
+  if (title_bar_style_ == TitleBarStyle::kHiddenInset) {
     base::scoped_nsobject<NSToolbar> toolbar(
         [[NSToolbar alloc] initWithIdentifier:@"titlebarStylingToolbar"]);
     [toolbar setShowsBaselineSeparator:NO];
@@ -513,10 +535,12 @@ NativeWindowMac::NativeWindowMac(const gin_helper::Dictionary& options,
   original_level_ = [window_ level];
 }
 
-NativeWindowMac::~NativeWindowMac() {
+NativeWindowMac::~NativeWindowMac() {}
+
+void NativeWindowMac::Cleanup() {
+  DCHECK(!IsClosed());
   ui::NativeTheme::GetInstanceForNativeUi()->RemoveObserver(this);
-  if (wheel_event_monitor_)
-    [NSEvent removeMonitor:wheel_event_monitor_];
+  [NSEvent removeMonitor:wheel_event_monitor_];
 }
 
 void NativeWindowMac::RedrawTrafficLights() {
@@ -612,13 +636,6 @@ void NativeWindowMac::Close() {
 }
 
 void NativeWindowMac::CloseImmediately() {
-  // Remove event monitor before destroying window, otherwise the monitor may
-  // call its callback after window has been destroyed.
-  if (wheel_event_monitor_) {
-    [NSEvent removeMonitor:wheel_event_monitor_];
-    wheel_event_monitor_ = nil;
-  }
-
   // Retain the child window before closing it. If the last reference to the
   // NSWindow goes away inside -[NSWindow close], then bad stuff can happen.
   // See e.g. http://crbug.com/616701.
@@ -1026,7 +1043,7 @@ void NativeWindowMac::Invalidate() {
 
 void NativeWindowMac::SetTitle(const std::string& title) {
   [window_ setTitle:base::SysUTF8ToNSString(title)];
-  if (title_bar_style_ == TitleBarStyle::HIDDEN) {
+  if (title_bar_style_ == TitleBarStyle::kHidden) {
     RedrawTrafficLights();
   }
 }
@@ -1121,7 +1138,8 @@ void NativeWindowMac::SetSimpleFullScreen(bool simple_fullscreen) {
     }
 
     // Restore window controls visibility state
-    const bool window_button_hidden = !window_button_visibility_.value_or(true);
+    const bool window_button_hidden =
+        !window_button_visibility_.value_or(true) || !has_frame();
     [[window standardWindowButton:NSWindowZoomButton]
         setHidden:window_button_hidden];
     [[window standardWindowButton:NSWindowMiniaturizeButton]
@@ -1252,12 +1270,15 @@ void NativeWindowMac::AddBrowserView(NativeBrowserView* view) {
   }
 
   add_browser_view(view);
-  auto* native_view =
-      view->GetInspectableWebContentsView()->GetNativeView().GetNativeNSView();
-  [[window_ contentView] addSubview:native_view
-                         positioned:NSWindowAbove
-                         relativeTo:nil];
-  native_view.hidden = NO;
+  if (view->GetInspectableWebContentsView()) {
+    auto* native_view = view->GetInspectableWebContentsView()
+                            ->GetNativeView()
+                            .GetNativeNSView();
+    [[window_ contentView] addSubview:native_view
+                           positioned:NSWindowAbove
+                           relativeTo:nil];
+    native_view.hidden = NO;
+  }
 
   [CATransaction commit];
 }
@@ -1271,8 +1292,9 @@ void NativeWindowMac::RemoveBrowserView(NativeBrowserView* view) {
     return;
   }
 
-  [view->GetInspectableWebContentsView()->GetNativeView().GetNativeNSView()
-      removeFromSuperview];
+  if (view->GetInspectableWebContentsView())
+    [view->GetInspectableWebContentsView()->GetNativeView().GetNativeNSView()
+        removeFromSuperview];
   remove_browser_view(view);
 
   [CATransaction commit];
@@ -1351,8 +1373,24 @@ void NativeWindowMac::SetProgressBar(double progress,
 void NativeWindowMac::SetOverlayIcon(const gfx::Image& overlay,
                                      const std::string& description) {}
 
-void NativeWindowMac::SetVisibleOnAllWorkspaces(bool visible) {
+void NativeWindowMac::SetVisibleOnAllWorkspaces(bool visible,
+                                                bool visibleOnFullScreen) {
+  // In order for NSWindows to be visible on fullscreen we need to functionally
+  // mimic app.dock.hide() since Apple changed the underlying functionality of
+  // NSWindows starting with 10.14 to disallow NSWindows from floating on top of
+  // fullscreen apps.
+  ProcessSerialNumber psn = {0, kCurrentProcess};
+  if (visibleOnFullScreen) {
+    [window_ setCanHide:NO];
+    TransformProcessType(&psn, kProcessTransformToUIElementApplication);
+  } else {
+    [window_ setCanHide:YES];
+    TransformProcessType(&psn, kProcessTransformToForegroundApplication);
+  }
+
   SetCollectionBehavior(visible, NSWindowCollectionBehaviorCanJoinAllSpaces);
+  SetCollectionBehavior(visibleOnFullScreen,
+                        NSWindowCollectionBehaviorFullScreenAuxiliary);
 }
 
 bool NativeWindowMac::IsVisibleOnAllWorkspaces() {
@@ -1406,7 +1444,7 @@ bool NativeWindowMac::AddTabbedWindow(NativeWindow* window) {
 }
 
 bool NativeWindowMac::SetWindowButtonVisibility(bool visible) {
-  if (title_bar_style_ == TitleBarStyle::CUSTOM_BUTTONS_ON_HOVER) {
+  if (title_bar_style_ == TitleBarStyle::kCustomButtonsOnHover) {
     return false;
   }
 
@@ -1438,7 +1476,7 @@ void NativeWindowMac::SetVibrancy(const std::string& type) {
   background_color_before_vibrancy_.reset([[window_ backgroundColor] retain]);
   transparency_before_vibrancy_ = [window_ titlebarAppearsTransparent];
 
-  if (title_bar_style_ != TitleBarStyle::NORMAL) {
+  if (title_bar_style_ != TitleBarStyle::kNormal) {
     [window_ setTitlebarAppearsTransparent:YES];
     [window_ setBackgroundColor:[NSColor clearColor]];
   }
@@ -1451,7 +1489,14 @@ void NativeWindowMac::SetVibrancy(const std::string& type) {
 
     [effect_view setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
     [effect_view setBlendingMode:NSVisualEffectBlendingModeBehindWindow];
-    [effect_view setState:NSVisualEffectStateFollowsWindowActiveState];
+
+    if (visual_effect_state_ == VisualEffectState::kActive) {
+      [effect_view setState:NSVisualEffectStateActive];
+    } else if (visual_effect_state_ == VisualEffectState::kInactive) {
+      [effect_view setState:NSVisualEffectStateInactive];
+    } else {
+      [effect_view setState:NSVisualEffectStateFollowsWindowActiveState];
+    }
 
     // Make frameless Vibrant windows have rounded corners.
     if (!has_frame() && !is_modal()) {
@@ -1652,7 +1697,7 @@ void NativeWindowMac::AddContentViewLayers(bool minimizable, bool closable) {
     // The fullscreen button should always be hidden for frameless window.
     [[window_ standardWindowButton:NSWindowFullScreenButton] setHidden:YES];
 
-    if (title_bar_style_ == TitleBarStyle::CUSTOM_BUTTONS_ON_HOVER) {
+    if (title_bar_style_ == TitleBarStyle::kCustomButtonsOnHover) {
       buttons_view_.reset(
           [[CustomWindowButtonView alloc] initWithFrame:NSZeroRect]);
 
@@ -1666,7 +1711,7 @@ void NativeWindowMac::AddContentViewLayers(bool minimizable, bool closable) {
 
       [[window_ contentView] addSubview:buttons_view_];
     } else {
-      if (title_bar_style_ != TitleBarStyle::NORMAL)
+      if (title_bar_style_ != TitleBarStyle::kNormal)
         return;
 
       // Hide the window buttons.

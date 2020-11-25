@@ -14,8 +14,8 @@ def is_fs_case_sensitive():
 sys.path.append(
   os.path.abspath(os.path.dirname(os.path.abspath(__file__)) + "/../.."))
 
-from lib.config import PLATFORM, s3_config, enable_verbose_mode
-from lib.util import get_electron_branding, execute, rm_rf, safe_mkdir, s3put, \
+from lib.config import PLATFORM, s3_config
+from lib.util import get_electron_branding, execute, s3put, \
                      get_out_dir, ELECTRON_DIR
 
 RELEASE_DIR = get_out_dir()
@@ -36,16 +36,21 @@ if sys.platform == "win32":
 
 def main():
   os.chdir(ELECTRON_DIR)
+  files = []
   if PLATFORM == 'win32':
     for pdb in PDB_LIST:
       run_symstore(pdb, SYMBOLS_DIR, PRODUCT_NAME)
     files = glob.glob(SYMBOLS_DIR + '/*.pdb/*/*.pdb')
-  else:
-    files = glob.glob(SYMBOLS_DIR + '/*/*/*.sym')
+
+  files += glob.glob(SYMBOLS_DIR + '/*/*/*.sym')
 
   for symbol_file in files:
     print("Generating Sentry src bundle for: " + symbol_file)
-    subprocess.check_output([NPX_CMD, '@sentry/cli@1.51.1', 'difutil', 'bundle-sources', symbol_file])
+    npx_env = os.environ.copy()
+    npx_env['npm_config_yes'] = 'true'
+    subprocess.check_output([
+      NPX_CMD, '@sentry/cli@1.51.1', 'difutil', 'bundle-sources',
+      symbol_file], env=npx_env)
 
   files += glob.glob(SYMBOLS_DIR + '/*/*/*.src.zip')
 

@@ -32,6 +32,11 @@ class NativeWindowMac : public NativeWindow, public ui::NativeThemeObserver {
   NativeWindowMac(const gin_helper::Dictionary& options, NativeWindow* parent);
   ~NativeWindowMac() override;
 
+  // Cleanup observers when window is getting closed. Note that the destructor
+  // can be called much later after window gets closed, so we should not do
+  // cleanup in destructor.
+  void Cleanup();
+
   // NativeWindow:
   void SetContentView(views::View* view) override;
   void Close() override;
@@ -118,7 +123,8 @@ class NativeWindowMac : public NativeWindow, public ui::NativeThemeObserver {
   void SetOverlayIcon(const gfx::Image& overlay,
                       const std::string& description) override;
 
-  void SetVisibleOnAllWorkspaces(bool visible) override;
+  void SetVisibleOnAllWorkspaces(bool visible,
+                                 bool visibleOnFullScreen) override;
   bool IsVisibleOnAllWorkspaces() override;
 
   void SetAutoHideCursor(bool auto_hide) override;
@@ -137,6 +143,7 @@ class NativeWindowMac : public NativeWindow, public ui::NativeThemeObserver {
       std::vector<gin_helper::PersistentDictionary> items) override;
   void RefreshTouchBarItem(const std::string& item_id) override;
   void SetEscapeTouchBarItem(gin_helper::PersistentDictionary item) override;
+  void SetGTKDarkThemeEnabled(bool use_dark_theme) override {}
 
   gfx::Rect ContentBoundsToWindowBounds(const gfx::Rect& bounds) const override;
   gfx::Rect WindowBoundsToContentBounds(const gfx::Rect& bounds) const override;
@@ -156,11 +163,17 @@ class NativeWindowMac : public NativeWindow, public ui::NativeThemeObserver {
   gfx::Point GetTrafficLightPosition() const override;
   void OnNativeThemeUpdated(ui::NativeTheme* observed_theme) override;
 
+  enum class VisualEffectState {
+    kFollowWindow,
+    kActive,
+    kInactive,
+  };
+
   enum class TitleBarStyle {
-    NORMAL,
-    HIDDEN,
-    HIDDEN_INSET,
-    CUSTOM_BUTTONS_ON_HOVER,
+    kNormal,
+    kHidden,
+    kHiddenInset,
+    kCustomButtonsOnHover,
   };
   TitleBarStyle title_bar_style() const { return title_bar_style_; }
 
@@ -215,7 +228,10 @@ class NativeWindowMac : public NativeWindow, public ui::NativeThemeObserver {
   NSApplicationPresentationOptions kiosk_options_;
 
   // The "titleBarStyle" option.
-  TitleBarStyle title_bar_style_ = TitleBarStyle::NORMAL;
+  TitleBarStyle title_bar_style_ = TitleBarStyle::kNormal;
+
+  // The "visualEffectState" option.
+  VisualEffectState visual_effect_state_ = VisualEffectState::kFollowWindow;
 
   // The visibility mode of window button controls when explicitly set through
   // setWindowButtonVisibility().
