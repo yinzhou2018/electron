@@ -752,6 +752,14 @@ void TopLevelWindow::AddBrowserView(v8::Local<v8::Value> value) {
     auto get_that_view = browser_views_.find(browser_view->weak_map_id());
     if (get_that_view == browser_views_.end()) {
       if (browser_view->web_contents()) {
+        // If we're reparenting a BrowserView, ensure that it's detached from
+        // its previous owner window.
+        auto* owner_window = browser_view->web_contents()->owner_window();
+        if (owner_window && owner_window != window_.get()) {
+          owner_window->RemoveBrowserView(browser_view->view());
+          browser_view->web_contents()->SetOwnerWindow(nullptr);
+        }
+
         window_->AddBrowserView(browser_view->view());
         browser_view->web_contents()->SetOwnerWindow(window_.get());
       }
@@ -773,6 +781,25 @@ void TopLevelWindow::RemoveBrowserView(v8::Local<v8::Value> value) {
       (*get_that_view).second.Reset(isolate(), value);
       browser_views_.erase(get_that_view);
     }
+  }
+}
+
+void TopLevelWindow::SetTopBrowserView(v8::Local<v8::Value> value,
+                                       gin_helper::Arguments* args) {
+  gin::Handle<BrowserView> browser_view;
+  if (value->IsObject() &&
+      gin::ConvertFromV8(isolate(), value, &browser_view)) {
+    if (!browser_view->web_contents())
+      return;
+    auto* owner_window = browser_view->web_contents()->owner_window();
+    auto get_that_view = browser_views_.find(browser_view->ID());
+    if (get_that_view == browser_views_.end() ||
+        (owner_window && owner_window != window_.get())) {
+      args->ThrowError("Given BrowserView is not attached to the window");
+      return;
+    }
+
+    window_->SetTopBrowserView(browser_view->view());
   }
 }
 
@@ -1067,9 +1094,14 @@ void TopLevelWindow::ResetBrowserViews() {
                            v8::Local<v8::Value>::New(isolate(), item.second),
                            &browser_view) &&
         !browser_view.IsEmpty()) {
+      // There's a chance that the BrowserView may have been reparented - only
+      // reset if the owner window is *this* window.
       if (browser_view->web_contents()) {
-        window_->RemoveBrowserView(browser_view->view());
-        browser_view->web_contents()->SetOwnerWindow(nullptr);
+        auto* owner_window = browser_view->web_contents()->owner_window();
+        if (owner_window == window_.get()) {
+          browser_view->web_contents()->SetOwnerWindow(nullptr);
+          owner_window->RemoveBrowserView(browser_view->view());
+        }
       }
     }
 
@@ -1190,6 +1222,7 @@ void TopLevelWindow::BuildPrototype(v8::Isolate* isolate,
       .SetMethod("removeMenu", &TopLevelWindow::RemoveMenu)
       .SetMethod("setParentWindow", &TopLevelWindow::SetParentWindow)
       .SetMethod("setBrowserView", &TopLevelWindow::SetBrowserView)
+      .SetMethod("setTopBrowserView", &TopLevelWindow::SetTopBrowserView)
       .SetMethod("addBrowserView", &TopLevelWindow::AddBrowserView)
       .SetMethod("removeBrowserView", &TopLevelWindow::RemoveBrowserView)
       .SetMethod("getMediaSourceId", &TopLevelWindow::GetMediaSourceId)

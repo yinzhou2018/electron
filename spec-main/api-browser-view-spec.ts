@@ -2,7 +2,7 @@ import { expect } from 'chai';
 import * as ChildProcess from 'child_process';
 import * as path from 'path';
 import { emittedOnce } from './events-helpers';
-import { BrowserView, BrowserWindow } from 'electron/main';
+import { BrowserView, BrowserWindow, webContents } from 'electron/main';
 import { closeWindow } from './window-helpers';
 
 describe('BrowserView module', () => {
@@ -44,6 +44,15 @@ describe('BrowserView module', () => {
       view.destroy();
       expect(view.isDestroyed()).to.be.true('view is destroyed');
     });
+  });
+
+  it('can be created with an existing webContents', async () => {
+    const wc = (webContents as any).create({ sandbox: true });
+    await wc.loadURL('about:blank');
+
+    view = new BrowserView({ webContents: wc } as any);
+
+    expect(view.webContents.getURL()).to.equal('about:blank');
   });
 
   describe('BrowserView.setBackgroundColor()', () => {
@@ -140,11 +149,33 @@ describe('BrowserView module', () => {
       view1.destroy();
       view2.destroy();
     });
+
     it('does not throw if called multiple times with same view', () => {
       view = new BrowserView();
       w.addBrowserView(view);
       w.addBrowserView(view);
       w.addBrowserView(view);
+    });
+
+    it('can handle BrowserView reparenting', async () => {
+      view = new BrowserView();
+
+      w.addBrowserView(view);
+      view.webContents.loadURL('about:blank');
+      await emittedOnce(view.webContents, 'did-finish-load');
+
+      const w2 = new BrowserWindow({ show: false });
+      w2.addBrowserView(view);
+
+      w.close();
+
+      view.webContents.loadURL(`file://${fixtures}/pages/blank.html`);
+      await emittedOnce(view.webContents, 'did-finish-load');
+
+      // Clean up - the afterEach hook assumes the webContents on w is still alive.
+      w = new BrowserWindow({ show: false });
+      w2.close();
+      w2.destroy();
     });
   });
 
@@ -172,6 +203,32 @@ describe('BrowserView module', () => {
 
       view1.destroy();
       view2.destroy();
+    });
+  });
+
+  describe('BrowserWindow.setTopBrowserView()', () => {
+    it('should throw an error when a BrowserView is not attached to the window', () => {
+      view = new BrowserView();
+      expect(() => {
+        w.setTopBrowserView(view);
+      }).to.throw(/is not attached/);
+    });
+
+    it('should throw an error when a BrowserView is attached to some other window', () => {
+      view = new BrowserView();
+
+      const win2 = new BrowserWindow();
+
+      w.addBrowserView(view);
+      view.setBounds({ x: 0, y: 0, width: 100, height: 100 });
+      win2.addBrowserView(view);
+
+      expect(() => {
+        w.setTopBrowserView(view);
+      }).to.throw(/is not attached/);
+
+      win2.close();
+      win2.destroy();
     });
   });
 
